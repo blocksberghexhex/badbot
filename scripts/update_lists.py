@@ -36,14 +36,6 @@ HEADER_IPV6 = f"""\
 # License: Free for personal and commercial use
 """
 
-HEADER_ASN = f"""\
-# badbot.icu - ASN (Autonomous System Numbers) Bad Actor List
-# Automatically updated daily
-# Last updated: {TODAY}
-# Usage: Use this list to block traffic from known bad ASNs
-# Format: AS<number> <description>
-# License: Free for personal and commercial use
-"""
 
 # Public threat intelligence feeds providing IP addresses of bad actors.
 # These are well-known, freely available feeds commonly used for threat intel.
@@ -133,19 +125,6 @@ def sort_networks(networks: set[str], version: int) -> list[str]:
     return [str(n) for n in parsed]
 
 
-def read_existing(path: str) -> set[str]:
-    """Read existing list file and return the set of non-comment entries."""
-    entries: set[str] = set()
-    if not os.path.exists(path):
-        return entries
-    with open(path, encoding="utf-8") as fh:
-        for line in fh:
-            line = line.strip()
-            if line and not line.startswith("#"):
-                entries.add(line)
-    return entries
-
-
 def write_list(path: str, header: str, entries: list[str]) -> None:
     """Write a list file with the given header and entries."""
     os.makedirs(os.path.dirname(path), exist_ok=True)
@@ -163,23 +142,18 @@ def main() -> None:
     for url in FEEDS_IPV4:
         print(f"  {url}")
         lines = fetch_url(url)
-        v4, v6 = extract_ips(lines)
+        v4, _v6 = extract_ips(lines)
         all_ipv4.update(v4)
-        all_ipv6.update(v6)
 
     print("Fetching IPv6 feeds...")
     for url in FEEDS_IPV6:
         print(f"  {url}")
         lines = fetch_url(url)
-        v4, v6 = extract_ips(lines)
-        all_ipv4.update(v4)
+        _v4, v6 = extract_ips(lines)
         all_ipv6.update(v6)
 
-    # Merge with existing entries so we don't lose manually curated data
     ipv4_path = os.path.join(LISTS_DIR, "ipv4.txt")
     ipv6_path = os.path.join(LISTS_DIR, "ipv6.txt")
-    all_ipv4.update(read_existing(ipv4_path))
-    all_ipv6.update(read_existing(ipv6_path))
 
     sorted_ipv4 = sort_networks(all_ipv4, 4)
     sorted_ipv6 = sort_networks(all_ipv6, 6)
