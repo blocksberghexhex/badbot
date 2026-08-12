@@ -1,0 +1,7 @@
+# badbot.icu - ASN (Autonomous System Numbers) Bad Actor List
+# Automatically updated daily
+# Last updated: 2026-08-12
+# Usage: Use this list to block traffic from known bad ASNs
+# Format: AS<number> <description>
+# License: Free for personal and commercial use
+

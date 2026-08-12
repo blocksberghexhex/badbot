@@ -1,0 +1,7 @@
+# badbot.icu - IPv4 Bad Bot List
+# Automatically updated daily
+# Last updated: 2026-08-12
+# Usage: Use this list to block known bad bots and attackers
+# Format: One IP address or CIDR range per line
+# License: Free for personal and commercial use
+
