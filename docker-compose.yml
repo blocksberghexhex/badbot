@@ -1,0 +1,31 @@
+# badbot-collector mit Docker Compose. Anleitung: README.md
+services:
+  badbot-collector:
+    build: .
+    restart: unless-stopped
+    # Pflicht: Nur im Host-Netz sehen die Simulationen die echte Quelladresse.
+    # Ueber das Bridge-Netz mit Userland-Proxy kaemen alle Verbindungen von
+    # der Gateway-Adresse -- die Plattform verwirft solche Meldungen.
+    network_mode: host
+    read_only: true
+    cap_drop: [ALL]
+    # NET_BIND_SERVICE fuer Ports unter 1024, NET_ADMIN fuer die Sperren (nftables).
+    cap_add: [NET_BIND_SERVICE, NET_ADMIN]
+    security_opt: ["no-new-privileges:true"]
+    environment:
+      BADBOT_SCHLUESSEL_DATEI: /run/secrets/badbot_schluessel
+      # BADBOT_SPERREN_AUSNAHMEN: "192.0.2.0/24"  # eigenes Verwaltungsnetz
+      # BADBOT_SPERREN_TROCKEN: "1"              # Sperren nur protokollieren
+    secrets: [badbot_schluessel]
+    volumes:
+      - badbot-daten:/var/lib/badbot-collector
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
+
+secrets:
+  badbot_schluessel:
+    file: ./schluessel.txt
+
+volumes:
+  badbot-daten:

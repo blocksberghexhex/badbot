@@ -1,0 +1,26 @@
+#!/bin/sh
+# Nach der Installation des Pakets. Ein laufender Dienst wird neu gestartet
+# (Aktualisierung); ein neuer erst, wenn der Schluessel eingetragen ist.
+set -e
+daten="/Library/Application Support/badbot-collector"
+plist=/Library/LaunchDaemons/icu.badbot.collector.plist
+
+install -d -m 700 -o root -g wheel "$daten"
+[ -e "$daten/schluessel" ] || install -m 600 -o root -g wheel /dev/null "$daten/schluessel"
+chown root:wheel "$plist"
+chmod 644 "$plist"
+
+# Ist die Programm-Firewall von macOS an, braucht der Collector eine Freigabe
+# fuer eingehende Verbindungen -- sonst erreicht ihn niemand.
+fw=/usr/libexec/ApplicationFirewall/socketfilterfw
+if [ -x "$fw" ] && "$fw" --getglobalstate | grep -q enabled; then
+	"$fw" --add /usr/local/bin/badbot-collector >/dev/null
+	"$fw" --unblockapp /usr/local/bin/badbot-collector >/dev/null
+fi
+
+if launchctl print system/icu.badbot.collector >/dev/null 2>&1; then
+	launchctl kickstart -k system/icu.badbot.collector
+elif [ -s "$daten/schluessel" ]; then
+	launchctl bootstrap system "$plist"
+fi
+exit 0

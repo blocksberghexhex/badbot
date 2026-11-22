@@ -1,0 +1,5 @@
+*.md
+docker-compose.yml
+badbot-collector.service
+schluessel.txt
+php

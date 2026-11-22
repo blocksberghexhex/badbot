@@ -1,0 +1,61 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Installationspaket fuer Windows (WiX Toolset 5). Bau: paket/windows/bauen.ps1
+
+  Richtet ein: Programm unter "C:\Program Files\badbot-collector", Dienst
+  badbot-collector (automatisch, verzoegert, als LocalSystem, Neustart nach
+  Fehlern), Freigabe in der Windows-Firewall fuer das Programm und ein
+  Datenverzeichnis, das nur SYSTEM und Administratoren lesen.
+
+  Gestartet wird der Dienst nicht: Ohne Schluessel liefe er nicht an, und ein
+  Dienst, der beim Installieren nicht startet, laesst die ganze Installation
+  scheitern.
+
+  Der UpgradeCode bleibt fuer immer gleich; an ihm erkennt Windows, dass ein
+  neueres Paket das alte ersetzt.
+-->
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
+     xmlns:fw="http://wixtoolset.org/schemas/v4/wxs/firewall"
+     xmlns:util="http://wixtoolset.org/schemas/v4/wxs/util">
+  <Package Name="badbot-collector" Manufacturer="Süd-Data UG (haftungsbeschränkt)"
+           Version="$(Version)" UpgradeCode="{B5AD80E7-A433-4227-AD34-BAA4FDD0066F}" Scope="perMachine" Language="1031">
+    <MajorUpgrade DowngradeErrorMessage="Eine neuere Version von badbot-collector ist bereits installiert." />
+    <MediaTemplate EmbedCab="yes" />
+
+    <StandardDirectory Id="ProgramFiles64Folder">
+      <Directory Id="PROGRAMM" Name="badbot-collector">
+        <Component Id="Programm">
+          <File Id="badbotcollector.exe" Source="$(Exe)" KeyPath="yes">
+            <fw:FirewallException Id="Koeder" Name="badbot Koeder" Scope="any" Profile="all" />
+          </File>
+          <ServiceInstall Id="Dienst" Name="badbot-collector" DisplayName="badbot-collector"
+                          Description="Collector von badbot.icu: Simulationen, Meldungen, Sperren"
+                          Type="ownProcess" Start="auto" ErrorControl="normal" Account="LocalSystem">
+            <ServiceConfig DelayedAutoStart="yes" OnInstall="yes" OnReinstall="yes" />
+            <util:ServiceConfig FirstFailureActionType="restart" SecondFailureActionType="restart"
+                                ThirdFailureActionType="restart" RestartServiceDelayInSeconds="10"
+                                ResetPeriodInDays="1" />
+          </ServiceInstall>
+          <!-- Beim Anhalten raeumt der Collector seine Sperrregeln selbst ab. -->
+          <ServiceControl Id="DienstSteuerung" Name="badbot-collector" Stop="both" Remove="uninstall" Wait="yes" />
+        </Component>
+      </Directory>
+    </StandardDirectory>
+
+    <StandardDirectory Id="CommonAppDataFolder">
+      <Directory Id="DATEN" Name="badbot-collector">
+        <!-- Bleibt bei der Deinstallation: Schluessel und Puffer gehoeren dem Betreiber. -->
+        <Component Id="Daten" Permanent="yes" Guid="{03A2F9BC-5337-4CC7-8C9A-B9C9F95FCF48}">
+          <CreateFolder>
+            <PermissionEx Sddl="O:SYG:SYD:PAI(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)" />
+          </CreateFolder>
+        </Component>
+      </Directory>
+    </StandardDirectory>
+
+    <Feature Id="Collector">
+      <ComponentRef Id="Programm" />
+      <ComponentRef Id="Daten" />
+    </Feature>
+  </Package>
+</Wix>

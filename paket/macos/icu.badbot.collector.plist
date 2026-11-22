@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- badbot-collector als launchd-Daemon. Schluessel und Einstellungen liegen in
+     /Library/Application Support/badbot-collector (schluessel, collector.env). -->
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>icu.badbot.collector</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>/usr/local/bin/badbot-collector</string>
+	</array>
+	<key>EnvironmentVariables</key>
+	<dict>
+		<key>BADBOT_LOG_DATEI</key>
+		<string>/Library/Logs/badbot-collector.log</string>
+	</dict>
+	<key>RunAtLoad</key>
+	<true/>
+	<key>KeepAlive</key>
+	<true/>
+	<!-- Ohne Schluessel endet der Collector sofort; nicht im Sekundentakt neu starten. -->
+	<key>ThrottleInterval</key>
+	<integer>30</integer>
+	<!-- Zeit zum Abraeumen der Sperren nach SIGTERM. -->
+	<key>ExitTimeOut</key>
+	<integer>60</integer>
+	<!-- Nur was vor dem Oeffnen der Logdatei scheitert, etwa ein fehlender Schluessel. -->
+	<key>StandardErrorPath</key>
+	<string>/Library/Logs/badbot-collector.start.log</string>
+</dict>
+</plist>

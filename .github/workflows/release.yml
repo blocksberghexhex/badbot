@@ -1,0 +1,145 @@
+# Baut zu jedem Tag v* die Programme und Installationspakete und legt sie
+# mit Pruefsummen als Release ab.
+#
+# Signiert wird nur, wenn die Secrets gesetzt sind; sonst entstehen
+# unsignierte Pakete mit Warnung im Log:
+#   macOS:   MAC_ZERTIFIKATE_P12 (Base64, Developer ID Application und
+#            Installer), MAC_ZERTIFIKATE_PASSWORT, MAC_APP_IDENTITAET,
+#            MAC_PKG_IDENTITAET, APPLE_ID, APPLE_TEAM_ID, APPLE_APP_PASSWORT
+#   Windows: WINDOWS_SIGNIEREN_SKRIPT (PowerShell, signiert die uebergebene
+#            Datei beim Anbieter des Zertifikats)
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+jobs:
+  pruefen:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - run: go vet ./...
+      - run: go test ./...
+      - name: Uebersetzen fuer alle Systeme
+        run: |
+          for ziel in linux/amd64 linux/arm64 windows/amd64 windows/arm64 darwin/amd64 darwin/arm64; do
+            GOOS=${ziel%/*} GOARCH=${ziel#*/} go vet ./...
+          done
+
+  linux:
+    needs: pruefen
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Bauen
+        run: |
+          mkdir -p dist
+          for arch in amd64 arm64; do
+            CGO_ENABLED=0 GOOS=linux GOARCH=$arch go build -trimpath \
+              -ldflags "-s -w -X main.Version=$GITHUB_REF_NAME" \
+              -o "dist/badbot-collector-$GITHUB_REF_NAME-linux-$arch" ./cmd/badbot-collector
+          done
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux
+          path: dist/
+
+  windows:
+    needs: pruefen
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: WiX
+        run: |
+          dotnet tool install --global wix --version 5.0.2
+          wix extension add -g WixToolset.Firewall.wixext/5.0.2 WixToolset.Util.wixext/5.0.2
+      - name: Bauen
+        shell: pwsh
+        env:
+          SIGNIEREN_SKRIPT: ${{ secrets.WINDOWS_SIGNIEREN_SKRIPT }}
+        run: |
+          if ($env:SIGNIEREN_SKRIPT) {
+            $skript = Join-Path $env:RUNNER_TEMP 'signieren.ps1'
+            Set-Content -Path $skript -Value $env:SIGNIEREN_SKRIPT
+            $env:WINDOWS_SIGNIEREN = $skript
+          }
+          .\paket\windows\bauen.ps1 -Version $env:GITHUB_REF_NAME
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: dist/
+
+  macos:
+    needs: pruefen
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Bauen, signieren, beglaubigen
+        env:
+          ZERTIFIKATE: ${{ secrets.MAC_ZERTIFIKATE_P12 }}
+          ZERTIFIKATE_PASSWORT: ${{ secrets.MAC_ZERTIFIKATE_PASSWORT }}
+          APP_IDENTITAET: ${{ secrets.MAC_APP_IDENTITAET }}
+          PKG_IDENTITAET: ${{ secrets.MAC_PKG_IDENTITAET }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_APP_PASSWORT: ${{ secrets.APPLE_APP_PASSWORT }}
+        run: |
+          if [ -n "$ZERTIFIKATE" ]; then
+            # Eigener Schluesselbund nur fuer diesen Lauf.
+            kc="$RUNNER_TEMP/bau.keychain-db"
+            kcpw=$(openssl rand -hex 24)
+            security create-keychain -p "$kcpw" "$kc"
+            security set-keychain-settings -lut 3600 "$kc"
+            security unlock-keychain -p "$kcpw" "$kc"
+            echo "$ZERTIFIKATE" | base64 --decode > "$RUNNER_TEMP/z.p12"
+            security import "$RUNNER_TEMP/z.p12" -k "$kc" -P "$ZERTIFIKATE_PASSWORT" \
+              -T /usr/bin/codesign -T /usr/bin/productbuild
+            rm "$RUNNER_TEMP/z.p12"
+            security set-key-partition-list -S apple-tool:,apple: -s -k "$kcpw" "$kc" >/dev/null
+            security list-keychains -d user -s "$kc" $(security list-keychains -d user | tr -d '"')
+            export MAC_APP_IDENTITAET="$APP_IDENTITAET" MAC_PKG_IDENTITAET="$PKG_IDENTITAET"
+            if [ -n "$APPLE_ID" ]; then
+              xcrun notarytool store-credentials badbot --apple-id "$APPLE_ID" \
+                --team-id "$APPLE_TEAM_ID" --password "$APPLE_APP_PASSWORT" --keychain "$kc"
+              export MAC_NOTAR_PROFIL=badbot
+            fi
+          fi
+          paket/macos/bauen.sh "$GITHUB_REF_NAME"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos
+          path: dist/
+
+  release:
+    needs: [linux, windows, macos]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Pruefsummen und Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cd dist
+          sha256sum * > SHA256SUMS
+          gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --title "$GITHUB_REF_NAME" --generate-notes ./*
