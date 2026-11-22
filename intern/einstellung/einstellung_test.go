@@ -73,3 +73,21 @@ func TestSchluesselAusVorgabeort(t *testing.T) {
 		t.Error("http ohne lokale Adresse angenommen")
 	}
 }
+
+// TestFuerAlleBeschreibbarAbgelehnt: Eine Einstellungs- oder Schluesseldatei,
+// die jeder aendern kann, wird nicht verwendet.
+func TestFuerAlleBeschreibbarAbgelehnt(t *testing.T) {
+	dir := t.TempDir()
+	konfig := filepath.Join(dir, "collector.env")
+	os.WriteFile(konfig, []byte("BADBOT_SCHLUESSEL=bb1_x\n"), 0o600)
+	os.Chmod(konfig, 0o666)
+	if _, err := Laden("linux", umgebung(map[string]string{"BADBOT_KONFIG": konfig})); err == nil || !strings.Contains(err.Error(), "für alle beschreibbar") {
+		t.Fatalf("beschreibbare Einstellung angenommen: %v", err)
+	}
+	schluessel := filepath.Join(dir, "schluessel")
+	os.WriteFile(schluessel, []byte("bb1_y\n"), 0o600)
+	os.Chmod(schluessel, 0o646)
+	if _, err := Laden("linux", umgebung(map[string]string{"BADBOT_SCHLUESSEL_DATEI": schluessel})); err == nil {
+		t.Fatal("beschreibbare Schluesseldatei angenommen")
+	}
+}

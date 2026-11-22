@@ -4,13 +4,15 @@
 return [
     // API-Schlüssel aus dem Panel. Am besten in einer Datei außerhalb des
     // Web-Verzeichnisses (eine Zeile, Rechte 0600) ...
-    'schluessel_datei' => __DIR__ . '/../badbot-daten/schluessel',
+    // dirname(__DIR__, 2): zwei Ebenen über badbot.php -- liegt badbot.php in
+    // public_html/badbot/, also neben public_html, nicht darin.
+    'schluessel_datei' => \dirname(__DIR__, 2) . '/badbot-daten/schluessel',
     // ... oder direkt hier eintragen und schluessel_datei leeren:
     'schluessel' => '',
 
     // Verzeichnis für Puffer und Sperrliste, möglichst außerhalb des
     // Web-Verzeichnisses. Wird angelegt, falls es fehlt.
-    'daten' => __DIR__ . '/../badbot-daten',
+    'daten' => \dirname(__DIR__, 2) . '/badbot-daten',
 
     // Web-Wurzelverzeichnis der Seite. Leer: wird beim ersten Aufruf eines
     // Köderpfads übernommen. Dient der Erkennung von WordPress.

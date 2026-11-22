@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"strings"
 	"time"
 
 	"golang.org/x/sys/windows/svc"
@@ -97,10 +98,18 @@ func installieren() error {
 		return err
 	}
 	// Datenverzeichnis nur fuer SYSTEM und Administratoren: Dort liegt der
-	// Schluessel, und dort entstehen die Skripte fuer die Firewall.
-	if aus, err := exec.Command("icacls", v.Daten, "/inheritance:r",
-		"/grant:r", "*S-1-5-18:(OI)(CI)F", "/grant:r", "*S-1-5-32-544:(OI)(CI)F").CombinedOutput(); err != nil {
-		return fmt.Errorf("Rechte des Datenverzeichnisses: %v: %s", err, aus)
+	// Schluessel, und dort entstehen die Skripte fuer die Firewall. Hat ein
+	// Benutzer den Ordner schon angelegt, gehoeren ihm Ordner und Dateien;
+	// deshalb erst der Besitz, dann alle Eintraege zuruecksetzen, dann die
+	// zwei Freigaben -- sonst blieben seine eigenen Eintraege stehen.
+	for _, args := range [][]string{
+		{v.Daten, "/setowner", "*S-1-5-18", "/T", "/C"},
+		{v.Daten, "/reset", "/T", "/C"},
+		{v.Daten, "/inheritance:r", "/grant:r", "*S-1-5-18:(OI)(CI)F", "/grant:r", "*S-1-5-32-544:(OI)(CI)F"},
+	} {
+		if aus, err := exec.Command("icacls", args...).CombinedOutput(); err != nil {
+			return fmt.Errorf("Rechte des Datenverzeichnisses (icacls %s): %v: %s", strings.Join(args[1:], " "), err, aus)
+		}
 	}
 
 	m, err := mgr.Connect()

@@ -116,6 +116,11 @@ Entfernen: über „Apps“ in den Einstellungen, beziehungsweise mit
 `badbot-collector.exe dienst entfernen`. Das Datenverzeichnis bleibt in
 beiden Fällen.
 
+Gehören Datenverzeichnis, `collector.env` oder `schluessel` nicht SYSTEM oder
+den Administratoren — etwa weil ein Benutzer den Ordner vor der Installation
+angelegt hat —, startet der Collector nicht und nennt die Datei. `dienst
+installieren` setzt Besitz und Rechte des Ordners zurück.
+
 Belegte Ports: Windows hält 135, 139 und 445 selbst, und RDP liegt auf 3389.
 Beim Anlegen lässt das Panel die ersten drei weg; was trotzdem belegt ist,
 meldet der Collector im Panel und startet die übrigen Simulationen.
@@ -208,6 +213,37 @@ wie es vorher war. Der Anker liegt unter `com.apple`, weil das mitgelieferte
 `/etc/pf.conf` alles darunter auswertet — so bleibt die Systemdatei
 unverändert. Wer eine eigene `pf.conf` ohne `anchor "com.apple/*"` betreibt,
 bekommt eine Fehlermeldung statt wirkungsloser Sperren.
+
+## Echtzeitabfrage
+
+Steht eine Adresse, ein Netz oder ein AS gerade auf der Sperrliste? Das
+fragt derselbe Befehl ab, auch auf Rechnern ohne Collector:
+
+```sh
+BADBOT_ABFRAGE_SCHLUESSEL_DATEI=/etc/badbot/abfrage badbot-collector abfrage 192.0.2.7 198.51.100.0/24 AS64500
+```
+
+```
+192.0.2.7        gesperrt  adresse bis 2026-11-29 11:00 UTC
+198.51.100.0/24  frei
+AS64500          gesperrt  as unbefristet
+```
+
+- Der **Abfrage-Schlüssel** (`bbq_…`) entsteht im Portal unter *Konto* und ist
+  ein anderer als der des Collectors: Er kann nichts melden, der
+  Collector-Schlüssel nichts abfragen. `BADBOT_ABFRAGE_SCHLUESSEL` geht auch,
+  landet aber leicht in Prozesslisten.
+- **Ziele:** Adressen, Netze bis `/16` (IPv6 `/32`) und AS als `AS64500`. Ohne
+  Ziel auf der Befehlszeile liest der Befehl sie zeilenweise von der
+  Standardeingabe; `#` leitet einen Kommentar ein.
+- **Rückgabe** wie bei `grep`: `0` nichts gesperrt, `1` mindestens ein Ziel
+  gesperrt, `2` Fehler. Mit `-json` kommt die Antwort als JSON.
+- Jedes Ziel zählt einmal gegen das Abfragekontingent des Pakets. Mehr als
+  100 Ziele teilt der Befehl auf mehrere Anfragen auf.
+
+Die Schnittstelle dahinter ist `POST /v1/abfrage` mit `{"ziele": […]}` und
+dem Schlüssel als `Authorization: Bearer …`; die Typen stehen in
+[`protokoll/protokoll.go`](protokoll/protokoll.go).
 
 ## Daten auf dem Server
 

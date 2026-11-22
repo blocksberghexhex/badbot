@@ -81,8 +81,8 @@ func AusUmgebung() (*Einstellung, error) {
 	return Laden(runtime.GOOS, os.Getenv)
 }
 
-// Laden liest die Einstellung fuer ein Betriebssystem.
-func Laden(goos string, getenv func(string) string) (*Einstellung, error) {
+// werteLesen: Umgebung vor Einstellungsdatei vor Vorgabe.
+func werteLesen(goos string, getenv func(string) string) (func(name, vorgabe string) string, Vorgaben, error) {
 	v := VorgabenFuer(goos, getenv)
 	datei := getenv("BADBOT_KONFIG")
 	pflicht := datei != ""
@@ -93,10 +93,10 @@ func Laden(goos string, getenv func(string) string) (*Einstellung, error) {
 	if datei != "" {
 		var err error
 		if ausDatei, err = konfigLesen(datei); err != nil && (pflicht || !errors.Is(err, os.ErrNotExist)) {
-			return nil, err
+			return nil, v, err
 		}
 	}
-	wert := func(name, vorgabe string) string {
+	return func(name, vorgabe string) string {
 		if w := strings.TrimSpace(getenv(name)); w != "" {
 			return w
 		}
@@ -104,25 +104,80 @@ func Laden(goos string, getenv func(string) string) (*Einstellung, error) {
 			return w
 		}
 		return vorgabe
-	}
+	}, v, nil
+}
 
+// apiLesen prueft BADBOT_API.
+func apiLesen(roh string) (string, error) {
+	api := strings.TrimSuffix(roh, "/")
+	u, err := url.Parse(api)
+	if err != nil || u.Host == "" {
+		return "", fmt.Errorf("BADBOT_API unbrauchbar: %q", api)
+	}
+	// Nur https. http allein fuer lokale Tests -- ein Schalter, der die
+	// Zertifikatspruefung abschaltet, existiert absichtlich nicht.
+	if u.Scheme != "https" && !(u.Scheme == "http" && lokal(u.Hostname())) {
+		return "", errors.New("BADBOT_API muss https verwenden")
+	}
+	return api, nil
+}
+
+// schluesselLesen: aus der Umgebung oder einer vertrauenswuerdigen Datei.
+func schluesselLesen(wert func(name, vorgabe string) string, name, vorgabeDatei, praefix string) (string, error) {
+	s := wert(name, "")
+	datei := wert(name+"_DATEI", "")
+	if datei == "" && s == "" {
+		datei = vorgabeDatei
+	}
+	if datei != "" {
+		b, err := os.ReadFile(datei)
+		if err != nil {
+			return "", fmt.Errorf("Schluesseldatei: %w", err)
+		}
+		if err := Vertrauenswuerdig(datei); err != nil {
+			return "", err
+		}
+		s = strings.TrimSpace(string(b))
+	}
+	if !strings.HasPrefix(s, praefix) {
+		return "", fmt.Errorf("%w (%s oder %s_DATEI)", errKeinSchluessel, name, name)
+	}
+	return s, nil
+}
+
+var errKeinSchluessel = errors.New("kein gueltiger Schluessel")
+
+// AbfrageLaden liest, was der Befehl "abfrage" braucht: BADBOT_API und
+// BADBOT_ABFRAGE_SCHLUESSEL bzw. BADBOT_ABFRAGE_SCHLUESSEL_DATEI. Ein
+// Collector-Schluessel taugt nicht -- abfragen darf auch, wer keinen
+// Collector betreibt.
+func AbfrageLaden(goos string, getenv func(string) string) (api, schluessel string, err error) {
+	wert, _, err := werteLesen(goos, getenv)
+	if err != nil {
+		return "", "", err
+	}
+	if api, err = apiLesen(wert("BADBOT_API", VorgabeAPI)); err != nil {
+		return "", "", err
+	}
+	schluessel, err = schluesselLesen(wert, "BADBOT_ABFRAGE_SCHLUESSEL", "", "bbq_")
+	return api, schluessel, err
+}
+
+// Laden liest die Einstellung fuer ein Betriebssystem.
+func Laden(goos string, getenv func(string) string) (*Einstellung, error) {
+	wert, v, err := werteLesen(goos, getenv)
+	if err != nil {
+		return nil, err
+	}
 	e := &Einstellung{
-		API:       wert("BADBOT_API", VorgabeAPI),
 		Daten:     wert("BADBOT_DATEN", v.Daten),
 		Trocken:   wert("BADBOT_SPERREN_TROCKEN", "") == "1",
 		LogLevel:  wert("BADBOT_LOG_LEVEL", "info"),
 		LogDatei:  wert("BADBOT_LOG_DATEI", ""),
 		Plattform: PlattformName(goos),
 	}
-	e.API = strings.TrimSuffix(e.API, "/")
-	u, err := url.Parse(e.API)
-	if err != nil || u.Host == "" {
-		return nil, fmt.Errorf("BADBOT_API unbrauchbar: %q", e.API)
-	}
-	// Nur https. http allein fuer lokale Tests -- ein Schalter, der die
-	// Zertifikatspruefung abschaltet, existiert absichtlich nicht.
-	if u.Scheme != "https" && !(u.Scheme == "http" && lokal(u.Hostname())) {
-		return nil, errors.New("BADBOT_API muss https verwenden")
+	if e.API, err = apiLesen(wert("BADBOT_API", VorgabeAPI)); err != nil {
+		return nil, err
 	}
 
 	for _, n := range strings.FieldsFunc(wert("BADBOT_SPERREN_AUSNAHMEN", ""), func(r rune) bool { return r == ',' || r == ' ' }) {
@@ -137,20 +192,10 @@ func Laden(goos string, getenv func(string) string) (*Einstellung, error) {
 		e.Ausnahmen = append(e.Ausnahmen, p.Masked())
 	}
 
-	e.Schluessel = wert("BADBOT_SCHLUESSEL", "")
-	schluesselDatei := wert("BADBOT_SCHLUESSEL_DATEI", "")
-	if schluesselDatei == "" && e.Schluessel == "" {
-		schluesselDatei = v.Schluessel
-	}
-	if schluesselDatei != "" {
-		b, err := os.ReadFile(schluesselDatei)
-		if err != nil {
-			return nil, fmt.Errorf("Schluesseldatei: %w", err)
-		}
-		e.Schluessel = strings.TrimSpace(string(b))
-	}
-	if !strings.HasPrefix(e.Schluessel, "bb1_") {
+	if e.Schluessel, err = schluesselLesen(wert, "BADBOT_SCHLUESSEL", v.Schluessel, "bb1_"); errors.Is(err, errKeinSchluessel) {
 		return nil, errors.New("kein gueltiger API-Schluessel (BADBOT_SCHLUESSEL oder BADBOT_SCHLUESSEL_DATEI)")
+	} else if err != nil {
+		return nil, err
 	}
 	return e, nil
 }
@@ -160,6 +205,10 @@ func Laden(goos string, getenv func(string) string) (*Einstellung, error) {
 func konfigLesen(datei string) (map[string]string, error) {
 	f, err := os.Open(datei)
 	if err != nil {
+		return nil, err
+	}
+	if err := Vertrauenswuerdig(datei); err != nil {
+		f.Close()
 		return nil, err
 	}
 	defer f.Close()

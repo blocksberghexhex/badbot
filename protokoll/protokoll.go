@@ -122,3 +122,37 @@ const (
 	HoechstSaetze = 5000
 	HoechstBytes  = 1 << 20
 )
+
+// ---------------------------------------------------------------------------
+// Echtzeitabfrage (GET/POST /v1/abfrage, eigener Schluessel bbq_...)
+
+// AbfrageHoechstZiele je Anfrage; mehr teilt der Client auf.
+const AbfrageHoechstZiele = 100
+
+// Abfrage: Adressen, Netze (bis /16 bzw. /32) oder AS ("AS64500").
+type Abfrage struct {
+	Ziele []string `json:"ziele"`
+}
+
+// AbfrageAntwort: ein Ergebnis je Ziel, in derselben Reihenfolge.
+type AbfrageAntwort struct {
+	Stand      time.Time         `json:"stand"`
+	Ergebnisse []AbfrageErgebnis `json:"ergebnisse"`
+}
+
+// AbfrageErgebnis: gesperrt oder nicht, und auf welchen Stufen bis wann.
+// Fehler ist gesetzt, wenn das Ziel unlesbar war; es zaehlt dann nicht.
+type AbfrageErgebnis struct {
+	Ziel     string           `json:"ziel"`
+	Gesperrt bool             `json:"gesperrt"`
+	Treffer  []AbfrageTreffer `json:"treffer,omitempty"`
+	Fehler   string           `json:"fehler,omitempty"`
+}
+
+// AbfrageTreffer: Bis nil heisst unbefristet; Anzahl, wie viele Sperren das
+// Ziel beruehren (bei Netzen und AS oft mehr als eine).
+type AbfrageTreffer struct {
+	Stufe  string     `json:"stufe"`
+	Bis    *time.Time `json:"bis"`
+	Anzahl int        `json:"anzahl"`
+}

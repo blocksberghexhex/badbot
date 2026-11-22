@@ -4,7 +4,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/netip"
+	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -120,10 +122,60 @@ func TestSpeichernUndNachliefern(t *testing.T) {
 
 func TestUeberlaufWirdGezaehlt(t *testing.T) {
 	p := Neu(5*time.Minute, 2048)
-	for i := 0; i < hoechstOffen+10; i++ {
+	grenze := speicherBudget / jeDatensatz
+	for i := 0; i < grenze+10; i++ {
 		p.Hinzu(Beobachtung{Quelle: doku(i), Simulation: "ssh", Zeit: t0})
 	}
-	if st := p.Stand(); st.VerworfenSeitStart != 10 || st.Datensaetze != hoechstOffen {
+	if st := p.Stand(); st.VerworfenSeitStart != 10 || st.Datensaetze != grenze {
 		t.Fatalf("Stand: %+v", st)
+	}
+	// Offene und wartende teilen sich das Budget: Versiegelte Datensaetze
+	// machen keinen Platz fuer neue Quellen; gemeldete schon.
+	p.AllesVersiegeln()
+	p.Hinzu(Beobachtung{Quelle: doku(grenze + 20), Simulation: "ssh", Zeit: t0.Add(time.Hour)})
+	if st := p.Stand(); st.VerworfenSeitStart != 11 {
+		t.Fatalf("nach Versiegeln: %+v", st)
+	}
+	for s := p.Naechster(); s != nil; s = p.Naechster() {
+		p.Bestaetigt(s.Stapel)
+	}
+	if p.groesse != 0 {
+		t.Fatalf("Groesse nach dem Melden %d", p.groesse)
+	}
+}
+
+// TestSpeicherBleibtBegrenzt: Selbst mit der groessten Stichprobe, die die
+// Plattform einstellen kann, und lauter verschiedenen Quellen bleibt der
+// Puffer im Budget -- er waechst nicht mit der Zahl der Angreifer.
+func TestSpeicherBleibtBegrenzt(t *testing.T) {
+	p := Neu(5*time.Minute, 2048)
+	p.Einstellen(0, 1<<20) // Plattform verlangt 1 MiB -- wird gekappt
+	if p.probeGrenze != hoechstStichprobe {
+		t.Fatalf("Stichprobe %d", p.probeGrenze)
+	}
+	lang := strings.Repeat("\u00ff", 2000)
+	for i := 0; i < 3*speicherBudget/(jeDatensatz+hoechstStichprobe); i++ {
+		p.Hinzu(Beobachtung{Quelle: doku(i), Simulation: "dns", Zeit: t0, Probe: []Merkmal{{Feld: "name", Wert: lang}}})
+	}
+	var groesse int
+	for _, e := range p.offen {
+		groesse += jeDatensatz + e.probeGroesse
+	}
+	if groesse > speicherBudget || groesse != p.groesse {
+		t.Fatalf("Groesse %d, gefuehrt %d, Budget %d", groesse, p.groesse, speicherBudget)
+	}
+	p.AllesVersiegeln()
+	if p.groesse > speicherBudget+speicherBudget/100 { // Schaetzung und JSON weichen leicht ab
+		t.Fatalf("nach Versiegeln %d", p.groesse)
+	}
+
+	// Ein uebergrosser gespeicherter Puffer wird nicht geladen.
+	pfad := filepath.Join(t.TempDir(), "puffer.json")
+	os.WriteFile(pfad, make([]byte, hoechstPufferdatei+1), 0o600)
+	if err := Neu(5*time.Minute, 2048).Laden(pfad, t0); err == nil {
+		t.Fatal("uebergrosser Puffer geladen")
+	}
+	if _, err := os.Stat(pfad); err == nil {
+		t.Fatal("uebergrosser Puffer bleibt liegen")
 	}
 }

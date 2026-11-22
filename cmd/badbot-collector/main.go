@@ -41,6 +41,8 @@ func main() {
 	}
 	var err error
 	switch {
+	case flag.Arg(0) == "abfrage":
+		os.Exit(abfrageAusfuehren(flag.Args()[1:]))
 	case flag.Arg(0) == "dienst":
 		err = dienstBefehl(flag.Args()[1:])
 	case flag.NArg() > 0:
@@ -71,6 +73,13 @@ func laufen(ctx context.Context, dienst bool) error {
 	}
 	if err := os.MkdirAll(e.Daten, 0o700); err != nil {
 		return fmt.Errorf("Datenverzeichnis: %w", err)
+	}
+	// Dort entstehen unter Windows die Skripte fuer die Firewall; ein fremder
+	// Besitzer koennte sie zwischen Schreiben und Ausfuehren tauschen.
+	if dienst {
+		if err := einstellung.Vertrauenswuerdig(e.Daten); err != nil {
+			return err
+		}
 	}
 	var aus io.Writer = os.Stderr
 	if e.LogDatei == "" && dienst {

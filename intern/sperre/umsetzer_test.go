@@ -195,3 +195,21 @@ func TestWindowsFirewall(t *testing.T) {
 		t.Fatalf("Fehler: %v", err)
 	}
 }
+
+// TestNieSperrbar: Eine Liste, die alles, private Netze oder Link-Local
+// sperren wollte, laesst den Collector-Rechner erreichbar.
+func TestNieSperrbar(t *testing.T) {
+	s := Neu(true, nil, nil)
+	l := []string{"0.0.0.0/0", "0.0.0.0/1", "10.1.0.0/16", "192.168.1.1/32", "100.64.0.1/32", "169.254.1.0/24",
+		"fe80::/10", "fd00::1/128", "2000::/3", "203.0.113.0/24", "2001:db8::/32", "198.51.100.0/24"}
+	if err := s.Uebernehmen(&protokoll.Sperrliste{Stand: "s", Art: "voll", GueltigBis: jetzt.Add(time.Hour), Hinzu: l}); err != nil {
+		t.Fatal(err)
+	}
+	var wirksam []string
+	for _, p := range s.wirksam() {
+		wirksam = append(wirksam, p.String())
+	}
+	if got := strings.Join(wirksam, " "); got != "198.51.100.0/24 203.0.113.0/24 2001:db8::/32" {
+		t.Fatalf("wirksam: %s", got)
+	}
+}

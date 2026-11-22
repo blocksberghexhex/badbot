@@ -58,6 +58,11 @@ Webseite.
            └── badbot-konfig.php
    ```
 
+   Die Beispielkonfiguration zeigt genau dorthin. Liegt das Datenverzeichnis
+   doch im Web-Wurzelverzeichnis, schützt es nur die `.htaccess`, die der
+   Collector anlegt — **unter nginx oder ohne `AllowOverride` wären
+   Schlüssel und Puffer abrufbar.**
+
    Liegt das Datenverzeichnis doch im Web-Wurzelverzeichnis, legt der
    Collector dort eine `.htaccess` an, die jeden Abruf verbietet.
 4. Prüfen — per SSH, oder einmalig über die Cron-Oberfläche des Hosters:

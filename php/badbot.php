@@ -38,8 +38,12 @@ if (!\defined('BADBOT_COLLECTOR_VERSION')) {
         public const HOECHST_PORTS = 64;
         public const HOECHST_SAETZE = 5000;
         public const HOECHST_BYTES = 900000;      // unter 1 MiB, mit Abstand
-        public const HOECHST_OFFEN = 20000;
-        public const HOECHST_WARTEND = 50000;
+        // Jeder Köderaufruf liest und schreibt den offenen Puffer ganz; bei
+        // zu vielen Einträgen kostet ein Aufruf mehr Speicher, als der
+        // Webspace erlaubt, und der Collector hängt.
+        public const HOECHST_OFFEN = 2000;
+        public const HOECHST_WARTEND = 10000;
+        public const HOECHST_STICHPROBE = 1024;
         public const NACHLIEFERFRIST = 71 * 3600; // die Plattform nimmt 72 h an
         public const KOERPER = 16384;             // gelesene Bytes je Anfrage
         public const API = 'https://api.badbot.icu';
@@ -270,6 +274,33 @@ if (!\defined('BADBOT_COLLECTOR_VERSION')) {
                 } elseif ($hex > $flach[2 * $m + 1]) {
                     $lo = $m + 1;
                 } else {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        private const NIE_GESPERRT = ['0.0.0.0/8', '10.0.0.0/8', '100.64.0.0/10', '127.0.0.0/8', '169.254.0.0/16',
+            '172.16.0.0/12', '192.0.0.0/24', '192.168.0.0/16', '198.18.0.0/15', '224.0.0.0/3',
+            '::/8', 'fc00::/7', 'fe80::/10', 'ff00::/8'];
+
+        /** Zu große Netze (größer als /8 bzw. /19) und reservierte Bereiche sperrt keine Liste. */
+        public static function nieSperrbar(string $netz): bool
+        {
+            $nn = self::netzNormal($netz);
+            if ($nn === null) {
+                return true;
+            }
+            [$adresse, $bits] = \explode('/', $nn, 2);
+            $v6 = \str_contains($adresse, ':');
+            if ((int) $bits < ($v6 ? 19 : 8)) {
+                return true;
+            }
+            if (self::enthalten($adresse, self::NIE_GESPERRT)) {
+                return true;
+            }
+            foreach (self::NIE_GESPERRT as $r) {
+                if (self::enthalten(\explode('/', $r, 2)[0], [$nn])) {
                     return true;
                 }
             }
@@ -1067,7 +1098,7 @@ if (!\defined('BADBOT_COLLECTOR_VERSION')) {
                 $q = Netz::quelle($server, (array) ($k['vertrauenswuerdige_vorschaltnetze'] ?? []));
                 if ($q !== null) {
                     $fenster = (int) ($k['fenster_sekunden'] ?? 300);
-                    $grenze = (int) ($k['stichprobe_bytes'] ?? 2048);
+                    $grenze = \min((int) ($k['stichprobe_bytes'] ?? 1024), K::HOECHST_STICHPROBE);
                     $port = (int) ($server['SERVER_PORT'] ?? 0);
                     $sim = $a['sim'];
                     $probe = $a['probe'];
@@ -1099,7 +1130,7 @@ if (!\defined('BADBOT_COLLECTOR_VERSION')) {
 
         private static function nieSperren(string $ip): bool
         {
-            return Netz::enthalten($ip, ['127.0.0.0/8', '::1/128', '10.0.0.0/8', '172.16.0.0/12', '192.168.0.0/16', 'fc00::/7', 'fe80::/10']);
+            return Netz::enthalten($ip, ['127.0.0.0/8', '::1/128', '10.0.0.0/8', '172.16.0.0/12', '192.168.0.0/16', 'fc00::/7', 'fe80::/10', '169.254.0.0/16', '100.64.0.0/10']);
         }
 
         /** Ist die nächste Runde fällig? Liest nur den kleinen Zustand. */
@@ -1359,6 +1390,9 @@ if (!\defined('BADBOT_COLLECTOR_VERSION')) {
          */
         public static function kompilieren(string $stand, int $gueltigBis, array $netze, array $k): array
         {
+            // Was eine Liste nie sperren darf, fällt heraus -- ob Fehler oder
+            // manipulierte Liste: sonst bekäme jeder Besucher der Seite 403.
+            $netze = \array_values(\array_filter($netze, static fn ($n): bool => !Netz::nieSperrbar((string) $n)));
             $b = Netz::bereiche($netze);
             return ['stand' => $stand, 'gueltig_bis' => $gueltigBis, 'netze' => \array_values($netze),
                 'v4' => $b['v4'], 'v6' => $b['v6'],

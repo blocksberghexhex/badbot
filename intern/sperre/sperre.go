@@ -201,11 +201,40 @@ func (s *Sperre) wirksam() []netip.Prefix {
 // ausgenommen: ein Netz, das eine Ausnahme beruehrt, wird ganz ausgelassen.
 // Lieber eine Luecke in der Sperre als den eigenen Zugang aussperren.
 func (s *Sperre) ausgenommen(p netip.Prefix) bool {
-	if p.Addr().IsLoopback() || p.Addr().IsUnspecified() || p.Bits() == 0 {
+	if nieSperrbar(p) {
 		return true
 	}
 	for _, a := range s.Ausnahmen {
 		if a.Overlaps(p) {
+			return true
+		}
+	}
+	return false
+}
+
+// nieGesperrt: Bereiche, die kein Eintrag einer Sperrliste je treffen darf --
+// ob durch einen Fehler oder eine manipulierte Liste. Sonst saegt eine
+// einzige Liste allen Collector-Rechnern den eigenen Zugang ab (private
+// Netze, Link-Local fuer IPv6-Nachbarschaft, gemeinsamer Adressraum).
+var nieGesperrt = []netip.Prefix{
+	netip.MustParsePrefix("0.0.0.0/8"), netip.MustParsePrefix("10.0.0.0/8"),
+	netip.MustParsePrefix("100.64.0.0/10"), netip.MustParsePrefix("127.0.0.0/8"),
+	netip.MustParsePrefix("169.254.0.0/16"), netip.MustParsePrefix("172.16.0.0/12"),
+	netip.MustParsePrefix("192.0.0.0/24"), netip.MustParsePrefix("192.168.0.0/16"),
+	netip.MustParsePrefix("198.18.0.0/15"), netip.MustParsePrefix("224.0.0.0/3"),
+	netip.MustParsePrefix("::/8"), netip.MustParsePrefix("fc00::/7"),
+	netip.MustParsePrefix("fe80::/10"), netip.MustParsePrefix("ff00::/8"),
+}
+
+// nieSperrbar: zu grosse Netze (groesser als ein /8 bzw. /19) und alles,
+// was nieGesperrt beruehrt.
+func nieSperrbar(p netip.Prefix) bool {
+	a := p.Addr().Unmap()
+	if (a.Is4() && p.Bits() < 8) || (a.Is6() && p.Bits() < 19) {
+		return true
+	}
+	for _, n := range nieGesperrt {
+		if n.Overlaps(p) {
 			return true
 		}
 	}

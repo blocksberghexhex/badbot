@@ -3,6 +3,8 @@ declare(strict_types=1);
 
 use BadbotCollector\K;
 use BadbotCollector\Puffer;
+use BadbotCollector\Netz;
+use BadbotCollector\Collector;
 
 const T0 = 1795255200; // 2026-11-21 10:00:00 UTC, auf 300 s ausgerichtet
 
@@ -31,19 +33,19 @@ test('Puffer: Verdichtung, Ports, Stichprobe', function (): void {
 
 test('Puffer: Stapel, Teilen, Nachlieferfrist, Überlauf', function (): void {
     $saetze = [];
-    for ($i = 0; $i < 12000; $i++) {
+    for ($i = 0; $i < 9000; $i++) {
         $saetze[] = ['fenster' => Puffer::zeit(T0), 'quelle' => '2001:db8::' . dechex($i), 'simulation' => 'konfig-koeder', 'anzahl' => 1];
     }
     $w = [];
     Puffer::einreihen($w, $saetze, T0 + 600);
-    gleich(array_map(fn ($s) => count($s['datensaetze']), $w['stapel']), [5000, 5000, 2000], 'Stapelgrößen');
+    gleich(array_map(fn ($s) => count($s['datensaetze']), $w['stapel']), [5000, 4000], 'Stapelgrößen');
     pruefe(preg_match('/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/', $w['stapel'][0]['stapel']) === 1, 'UUID v4');
     $erster = $w['stapel'][0]['stapel'];
     Puffer::teilen($w, $erster);
-    gleich(array_map(fn ($s) => count($s['datensaetze']), $w['stapel']), [2500, 2500, 5000, 2000], 'geteilt');
+    gleich(array_map(fn ($s) => count($s['datensaetze']), $w['stapel']), [2500, 2500, 4000], 'geteilt');
     pruefe($w['stapel'][0]['stapel'] !== $erster, 'neue Kennung nach dem Teilen');
     Puffer::entfernen($w, $w['stapel'][0]['stapel']);
-    gleich(count($w['stapel']), 3, 'entfernt');
+    gleich(count($w['stapel']), 2, 'entfernt');
 
     // Zu alt für die Plattform: fällt weg und wird gezählt.
     $w2 = [];
@@ -55,6 +57,27 @@ test('Puffer: Stapel, Teilen, Nachlieferfrist, Überlauf', function (): void {
         Puffer::hinzu($o, q('2001:db8::' . dechex($i)), 'db-koeder', 443, T0, [], 300, 2048);
     }
     gleich([count($o['saetze']), $o['verworfen']], [K::HOECHST_OFFEN, 5], 'Überlauf gezählt');
+
+    // Mehr als der Wartepuffer fasst, wird gezählt statt gehalten.
+    $voll = [];
+    for ($i = 0; $i < K::HOECHST_WARTEND + 7; $i++) {
+        $voll[] = ['fenster' => Puffer::zeit(T0), 'quelle' => '2001:db8::' . dechex($i), 'simulation' => 'konfig-koeder', 'anzahl' => 1];
+    }
+    $w3 = [];
+    Puffer::einreihen($w3, $voll, T0 + 600);
+    $gehalten = array_sum(array_map(fn ($s) => count($s['datensaetze']), $w3['stapel']));
+    pruefe($gehalten <= K::HOECHST_WARTEND && $w3['verworfen'] === K::HOECHST_WARTEND + 7 - $gehalten, 'Wartepuffer begrenzt');
+});
+
+test('Sperrliste: nie sperrbar', function (): void {
+    foreach (['0.0.0.0/0', '0.0.0.0/1', '10.0.0.0/16', '169.254.1.1/32', '100.64.0.1/32', 'fe80::/10', '2000::/3', 'fd00::1/128'] as $n) {
+        pruefe(Netz::nieSperrbar($n), $n . ' ist sperrbar');
+    }
+    foreach (['203.0.113.0/24', '198.51.100.7/32', '2001:db8::/32'] as $n) {
+        pruefe(!Netz::nieSperrbar($n), $n . ' nicht sperrbar');
+    }
+    $l = Collector::kompilieren('s', 0, ['0.0.0.0/0', '203.0.113.0/24'], []);
+    gleich($l['netze'], ['203.0.113.0/24'], 'kompiliert ohne /0');
 });
 
 test('Puffer: Vorschaltnetz bleibt erhalten', function (): void {

@@ -57,12 +57,23 @@ type eintrag struct {
 	probeGroesse    int
 }
 
-// Grenzen gegen Speicherueberlauf bei einem Verbindungssturm.
+// Grenzen gegen Speicherueberlauf bei einem Verbindungssturm. Die Zahl der
+// Datensaetze folgt aus einem Speicherbudget: Ein Angreifer mit vielen
+// Quelladressen (gefaelschtes UDP, ein IPv6-/64) darf den Collector nicht
+// ueber das Speicherlimit seines Dienstes treiben -- sonst startet er neu,
+// laedt den vollen Puffer und faellt wieder um.
 const (
-	hoechstOffen    = 100000 // offene Datensaetze
-	hoechstWartend  = 200000 // versiegelte, noch nicht gemeldete Datensaetze
-	nachlieferfrist = 72 * time.Hour
+	speicherBudget     = 24 << 20 // Bytes fuer offene und wartende Datensaetze zusammen
+	jeDatensatz        = 400      // geschaetzter Grundbedarf eines Datensatzes ohne Stichprobe
+	hoechstStichprobe  = 4096     // mehr nimmt der Puffer von der Plattform nicht an
+	hoechstPufferdatei = 64 << 20 // groessere gespeicherte Puffer werden verworfen
+	nachlieferfrist    = 72 * time.Hour
 )
+
+// groesseVon schaetzt den Speicherbedarf eines versiegelten Datensatzes.
+func groesseVon(d protokoll.Datensatz) int {
+	return jeDatensatz + len(d.Stichprobe)
+}
 
 // Puffer verdichtet und haelt Datensaetze.
 type Puffer struct {
@@ -73,11 +84,12 @@ type Puffer struct {
 	wartend     []*protokoll.Stapel
 	nWartend    int
 	verworfen   int64
+	groesse     int // geschaetzter Speicherbedarf aller Datensaetze, offen und wartend
 }
 
 // Neu: fenster = Zeitfenster der Verdichtung, probeGrenze = Bytes je Stichprobe.
 func Neu(fenster time.Duration, probeGrenze int) *Puffer {
-	return &Puffer{fenster: fenster, probeGrenze: probeGrenze, offen: map[schluessel]*eintrag{}}
+	return &Puffer{fenster: fenster, probeGrenze: min(probeGrenze, hoechstStichprobe), offen: map[schluessel]*eintrag{}}
 }
 
 // Einstellen uebernimmt neue Werte aus der Konfiguration.
@@ -88,7 +100,7 @@ func (p *Puffer) Einstellen(fenster time.Duration, probeGrenze int) {
 		p.fenster = fenster
 	}
 	if probeGrenze > 0 {
-		p.probeGrenze = probeGrenze
+		p.probeGrenze = min(probeGrenze, hoechstStichprobe)
 	}
 }
 
@@ -101,12 +113,13 @@ func (p *Puffer) Hinzu(b Beobachtung) {
 		vorschalt: b.UeberVorschaltnetz, von: b.VerbindungVon}
 	e, ok := p.offen[k]
 	if !ok {
-		if len(p.offen) >= hoechstOffen {
+		if p.groesse+jeDatensatz > speicherBudget {
 			p.verworfen++
 			return
 		}
 		e = &eintrag{erster: b.Zeit, letzter: b.Zeit, probe: map[string][]any{}}
 		p.offen[k] = e
+		p.groesse += jeDatensatz
 	}
 	e.anzahl++
 	if b.Zeit.Before(e.erster) {
@@ -119,7 +132,11 @@ func (p *Puffer) Hinzu(b Beobachtung) {
 		e.portHinzu(b.Port)
 	}
 	for _, m := range b.Probe {
-		e.probeHinzu(m, p.probeGrenze)
+		// Die Stichprobe darf das Budget nicht sprengen; gezaehlt wird trotzdem.
+		grenze := min(p.probeGrenze, e.probeGroesse+speicherBudget-p.groesse)
+		vorher := e.probeGroesse
+		e.probeHinzu(m, grenze)
+		p.groesse += e.probeGroesse - vorher
 	}
 }
 
@@ -186,10 +203,7 @@ func (p *Puffer) versiegeln(fertig func(schluessel) bool) {
 			continue
 		}
 		delete(p.offen, k)
-		if p.nWartend+len(saetze) >= hoechstWartend {
-			p.verworfen += e.anzahl
-			continue
-		}
+		p.groesse -= jeDatensatz + e.probeGroesse
 		d := protokoll.Datensatz{
 			Fenster: k.fenster, Quelle: k.quelle.String(), Simulation: k.simulation, Anzahl: e.anzahl,
 			Erster: e.erster.UTC(), Letzter: e.letzter.UTC(), Ports: e.ports, PortsGekuerzt: e.gekuerzt,
@@ -205,6 +219,7 @@ func (p *Puffer) versiegeln(fertig func(schluessel) bool) {
 			d.UeberVorschaltnetz = true
 			d.VerbindungVon = k.von.String()
 		}
+		p.groesse += groesseVon(d)
 		saetze = append(saetze, d)
 	}
 	// Feste Reihenfolge, damit Stapel reproduzierbar sind (Tests, Fehlersuche).
@@ -243,6 +258,9 @@ func (p *Puffer) Bestaetigt(kennung string) {
 	for i, s := range p.wartend {
 		if s.Stapel == kennung {
 			p.nWartend -= len(s.Datensaetze)
+			for _, d := range s.Datensaetze {
+				p.groesse -= groesseVon(d)
+			}
 			p.wartend = append(p.wartend[:i], p.wartend[i+1:]...)
 			return
 		}
@@ -274,6 +292,9 @@ func (p *Puffer) Verwerfen(kennung string) {
 		if s.Stapel == kennung {
 			p.verworfen += int64(len(s.Datensaetze))
 			p.nWartend -= len(s.Datensaetze)
+			for _, d := range s.Datensaetze {
+				p.groesse -= groesseVon(d)
+			}
 			p.wartend = append(p.wartend[:i], p.wartend[i+1:]...)
 			return
 		}
@@ -309,6 +330,11 @@ func (p *Puffer) Speichern(pfad string) error {
 // Laden liest gespeicherte Stapel; Datensaetze ausserhalb der Nachlieferfrist
 // fallen weg, weil die Plattform sie ohnehin ablehnte.
 func (p *Puffer) Laden(pfad string, jetzt time.Time) error {
+	if st, err := os.Stat(filepath.Clean(pfad)); err == nil && st.Size() > hoechstPufferdatei {
+		// Ein Puffer dieser Groesse stammt aus einem Ueberlauf; ihn zu laden
+		// hiesse, erneut ueberzulaufen.
+		return errors.Join(errors.New("gespeicherter Puffer zu gross, verworfen"), os.Remove(pfad))
+	}
 	roh, err := os.ReadFile(filepath.Clean(pfad))
 	if errors.Is(err, os.ErrNotExist) {
 		return nil
@@ -332,6 +358,15 @@ func (p *Puffer) Laden(pfad string, jetzt time.Time) error {
 		if len(behalten) == 0 {
 			continue
 		}
+		zusatz := 0
+		for _, d := range behalten {
+			zusatz += groesseVon(d)
+		}
+		if p.groesse+zusatz > speicherBudget {
+			p.verworfen += int64(len(behalten))
+			continue
+		}
+		p.groesse += zusatz
 		if len(behalten) != len(s.Datensaetze) {
 			// Ein veraenderter Stapel bekommt eine neue Kennung -- die alte
 			// koennte der Plattform mit anderem Inhalt bekannt sein.

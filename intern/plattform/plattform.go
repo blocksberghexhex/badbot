@@ -28,7 +28,11 @@ type Zugang struct {
 // Neu baut einen Zugang mit festen Zeitgrenzen.
 func Neu(basis, schluessel, version, plattform string) *Zugang {
 	return &Zugang{Basis: basis, Schluessel: schluessel, Version: version, Plattform: plattform,
-		HTTP: &http.Client{Timeout: 30 * time.Second}}
+		HTTP: &http.Client{Timeout: 30 * time.Second,
+			// Keine Weiterleitungen: Go nimmt den Authorization-Kopf auf
+			// denselben Host mit, auch von https auf http -- eine falsch
+			// eingerichtete Weiterleitung schickte den Schluessel im Klartext.
+			CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}}
 }
 
 // Fehler ist eine Fehlerantwort der Plattform.
@@ -181,4 +185,28 @@ func (z *Zugang) Sperrliste(ctx context.Context, stand string) (*protokoll.Sperr
 	}
 	var s protokoll.Sperrliste
 	return &s, auswerten(resp, &s)
+}
+
+// Abfrage fragt Ziele in Echtzeit ab, in Paketen zu hoechstens
+// protokoll.AbfrageHoechstZiele. Der Zugang braucht dafuer einen
+// Abfrage-Schluessel (bbq_...), keinen Collector-Schluessel.
+func (z *Zugang) Abfrage(ctx context.Context, ziele []string) ([]protokoll.AbfrageErgebnis, error) {
+	var alle []protokoll.AbfrageErgebnis
+	for len(ziele) > 0 {
+		n := min(len(ziele), protokoll.AbfrageHoechstZiele)
+		resp, err := z.anfrage(ctx, "POST", "/abfrage", protokoll.Abfrage{Ziele: ziele[:n]}, nil)
+		if err != nil {
+			return alle, err
+		}
+		var a protokoll.AbfrageAntwort
+		if err := auswerten(resp, &a); err != nil {
+			return alle, err
+		}
+		if len(a.Ergebnisse) != n {
+			return alle, fmt.Errorf("Plattform: %d Ergebnisse fuer %d Ziele", len(a.Ergebnisse), n)
+		}
+		alle = append(alle, a.Ergebnisse...)
+		ziele = ziele[n:]
+	}
+	return alle, nil
 }
